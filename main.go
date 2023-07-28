@@ -5,16 +5,20 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	math "math/rand"
+	"time"
 
 	"golang.org/x/crypto/pbkdf2"
 )
 
 const (
-	_saltLength        = 16
-	_requestedLength   = 32
-	_formatMarker      = 0x01
-	_includeHeaderInfo = true
-	_iterCount         = 10000
+	saltLength        = 16
+	requestedLength   = 32
+	formatMarker      = 0x01
+	includeHeaderInfo = true
+	iterCount         = 10000
+	letterBytes       = "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"
+	wordLength        = 32
 )
 
 type Hasher struct{}
@@ -23,35 +27,46 @@ func NewHasher() *Hasher {
 	return &Hasher{}
 }
 
+func (h *Hasher) SecurityStamp() string {
+	math.Seed(time.Now().UnixNano())
+
+	word := make([]byte, wordLength)
+	for i := 0; i < wordLength; i++ {
+		word[i] = letterBytes[math.Intn(len(letterBytes))]
+	}
+
+	return string(word)
+}
+
 func (h *Hasher) HashPassword(password string) (string, error) {
 	if password == "" {
 		return "", fmt.Errorf("password cannot be empty")
 	}
 
-	salt := make([]byte, _saltLength)
+	salt := make([]byte, saltLength)
 	_, err := rand.Read(salt)
 	if err != nil {
 		return "", err
 	}
 
-	subkey := pbkdf2.Key([]byte(password), salt, _iterCount, _requestedLength, sha256.New)
+	subkey := pbkdf2.Key([]byte(password), salt, iterCount, requestedLength, sha256.New)
 
 	var headerByteLength = 1
-	if _includeHeaderInfo {
+	if includeHeaderInfo {
 		headerByteLength = 13
 	}
 
-	outputBytes := make([]byte, headerByteLength+_saltLength+len(subkey))
-	outputBytes[0] = _formatMarker
+	outputBytes := make([]byte, headerByteLength+saltLength+len(subkey))
+	outputBytes[0] = formatMarker
 
-	if _includeHeaderInfo {
+	if includeHeaderInfo {
 		writeNetworkByteOrder(outputBytes, 1, uint32(1))
-		writeNetworkByteOrder(outputBytes, 5, uint32(_iterCount))
-		writeNetworkByteOrder(outputBytes, 9, uint32(_saltLength))
+		writeNetworkByteOrder(outputBytes, 5, uint32(iterCount))
+		writeNetworkByteOrder(outputBytes, 9, uint32(saltLength))
 	}
 
 	copy(outputBytes[headerByteLength:], salt)
-	copy(outputBytes[headerByteLength+_saltLength:], subkey)
+	copy(outputBytes[headerByteLength+saltLength:], subkey)
 
 	return base64.StdEncoding.EncodeToString(outputBytes), nil
 }
@@ -71,42 +86,42 @@ func (h *Hasher) VerifyPassword(hashedPassword, enteredPassword string) bool {
 	}
 
 	verifyMarker := decodedHashedPassword[0]
-	if _formatMarker != verifyMarker {
+	if formatMarker != verifyMarker {
 		return false
 	}
 
-	if _includeHeaderInfo {
+	if includeHeaderInfo {
 		shaUInt := readNetworkByteOrder(decodedHashedPassword, 1)
 		if shaUInt != 1 {
 			return false
 		}
 
 		iterCountRead := readNetworkByteOrder(decodedHashedPassword, 5)
-		if _iterCount != int(iterCountRead) {
+		if iterCount != int(iterCountRead) {
 			return false
 		}
 
 		saltLengthRead := readNetworkByteOrder(decodedHashedPassword, 9)
-		if _saltLength != int(saltLengthRead) {
+		if saltLength != int(saltLengthRead) {
 			return false
 		}
 	}
 
 	headerByteLength := 1
-	if _includeHeaderInfo {
+	if includeHeaderInfo {
 		headerByteLength = 13
 	}
 
-	salt := decodedHashedPassword[headerByteLength : headerByteLength+_saltLength]
-	subkeyLength := len(decodedHashedPassword) - headerByteLength - _saltLength
+	salt := decodedHashedPassword[headerByteLength : headerByteLength+saltLength]
+	subkeyLength := len(decodedHashedPassword) - headerByteLength - saltLength
 
-	if _requestedLength != subkeyLength {
+	if requestedLength != subkeyLength {
 		return false
 	}
 
-	expectedSubkey := decodedHashedPassword[headerByteLength+_saltLength:]
+	expectedSubkey := decodedHashedPassword[headerByteLength+saltLength:]
 
-	actualSubkey := pbkdf2.Key([]byte(enteredPassword), salt, _iterCount, subkeyLength, sha256.New)
+	actualSubkey := pbkdf2.Key([]byte(enteredPassword), salt, iterCount, subkeyLength, sha256.New)
 
 	return byteArraysEqual(actualSubkey, expectedSubkey)
 }
